@@ -1212,6 +1212,9 @@ async function detectStorageMode(){
 function subscribeRealtime(){
   if(storageMode !== 'firebase' || !firebaseDocRef) return;
   firebaseDocRef.onSnapshot((snap)=>{
+    // ignora o "eco" imediato da nossa propria escrita (ainda nao confirmada pelo servidor);
+    // so reage quando a mudanca ja esta de fato confirmada
+    if(snap.metadata && snap.metadata.hasPendingWrites) return;
     if(suppressNextSnapshot){ suppressNextSnapshot = false; return; }
     if(!snap.exists) return;
     const data = snap.data();
@@ -1226,6 +1229,7 @@ function subscribeRealtime(){
 
   if(firebasePhotosCollRef){
     firebasePhotosCollRef.onSnapshot((snap)=>{
+      if(snap.metadata && snap.metadata.hasPendingWrites) return;
       if(suppressNextPhotosSnapshot){ suppressNextPhotosSnapshot = false; return; }
       evolutionPhotos = snap.docs.map(d => d.data());
       renderEvolution();
@@ -1342,7 +1346,14 @@ async function loadData(){
   try{ evolutionPhotos = rawPhotos ? JSON.parse(rawPhotos) : seedEvolutionPhotos; }catch(e){ evolutionPhotos = seedEvolutionPhotos; }
 }
 
-async function persistBoth(){
+let persistBothChain = Promise.resolve();
+function persistBoth(){
+  // encadeia os envios: cada um s\u00f3 come\u00e7a depois que o anterior terminar,
+  // e sempre l\u00ea os dados mais atuais na hora de enviar (nunca sobrescreve com dado velho)
+  persistBothChain = persistBothChain.then(()=> persistBothNow());
+  return persistBothChain;
+}
+async function persistBothNow(){
   if(storageMode === 'firebase'){
     try{
       suppressNextSnapshot = true;
@@ -1365,7 +1376,12 @@ async function persistBoth(){
 async function persistExpenses(){ return persistBoth(); }
 async function persistContributions(){ return persistBoth(); }
 
-async function persistEvolutionPhotos(){
+let persistPhotosChain = Promise.resolve();
+function persistEvolutionPhotos(){
+  persistPhotosChain = persistPhotosChain.then(()=> persistEvolutionPhotosNow());
+  return persistPhotosChain;
+}
+async function persistEvolutionPhotosNow(){
   if(storageMode === 'firebase'){
     try{
       suppressNextPhotosSnapshot = true;
