@@ -1043,6 +1043,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         <div class="code">S&#211;CIOS &#183; RONALDO &amp; HENRIQUE</div>
         <div id="syncBadge" style="font-size:9.5px; margin-top:2px; display:none;"></div>
         <div id="storageBadge" style="font-size:9.5px; margin-top:2px; display:none;"></div>
+        <div style="font-size:8px; color:var(--text-dim); opacity:.6; margin-top:2px;">vers&#227;o 2026-07-21-18h00</div>
       </div>
     </div>
     <div style="display:flex; gap:8px;">
@@ -1568,10 +1569,12 @@ async function storageSet(key, value){
 
 async function loadData(){
   if(storageMode === 'firebase'){
-    // migra\u00e7\u00e3o \u00fanica: se este aparelho j\u00e1 tinha lan\u00e7amentos salvos localmente
-    // ANTES de o Firebase ser ativado (ex.: comprovantes anexados durante os testes),
-    // sobe esses dados para o Firebase agora, em vez de perd\u00ea-los.
-    if(!localStorage.getItem('c280_firebase_migrated_v1')){
+    // se este aparelho tem lancamentos salvos localmente que ainda NAO foram
+    // confirmados na nuvem (seja na primeira vez, seja porque caiu para o modo
+    // local temporariamente em algum momento), sobe esses dados agora. Isso e
+    // verificado TODA vez (nao so uma vez na vida do aparelho), para nunca
+    // perder dados salvos durante uma eventual queda de conexao.
+    if(localStorage.getItem('c280_local_writes_pending') === '1'){
       try{
         const rawExpLocal = localStorage.getItem('c280_expenses');
         const rawContribLocal = localStorage.getItem('c280_contributions');
@@ -1585,10 +1588,10 @@ async function loadData(){
           evolutionPhotos = localPhotos || [];
           await persistBoth();
           await persistEvolutionPhotos();
-          showToast('Lan\u00e7amentos que j\u00e1 existiam neste aparelho foram enviados para a nuvem');
+          showToast('Lan\u00e7amentos que estavam salvos s\u00f3 neste aparelho foram enviados para a nuvem');
         }
+        localStorage.removeItem('c280_local_writes_pending');
       }catch(e){ console.error('migra\u00e7\u00e3o local \u2192 Firebase falhou:', e); }
-      localStorage.setItem('c280_firebase_migrated_v1', '1');
     }
 
     // se a migracao acima nao encontrou nada, busca do Firebase normalmente
@@ -1705,13 +1708,24 @@ async function persistBothNow(){
       return true;
     }catch(e){
       console.error(e);
-      showToast('N\u00e3o foi poss\u00edvel sincronizar com o servidor compartilhado');
+      // a escrita na nuvem falhou (ex.: internet caiu bem nessa hora) -- NUNCA deixa
+      // o dado se perder: salva localmente e marca para subir na nuvem assim que a
+      // conexao voltar (ver loadData / c280_local_writes_pending)
+      try{
+        localStorage.setItem('c280_expenses', JSON.stringify(expenses));
+        localStorage.setItem('c280_contributions', JSON.stringify(contributions));
+        localStorage.setItem('c280_local_writes_pending', '1');
+      }catch(e1){}
+      showToast('Sem conex\u00e3o para sincronizar agora \u2014 salvo neste aparelho, envia pra nuvem assim que a internet voltar');
       return false;
     }
   }
   const okE = await storageSet('expenses', JSON.stringify(expenses));
   const okC = await storageSet('contributions', JSON.stringify(contributions));
   if(!okE || !okC) showToast('N\u00e3o foi poss\u00edvel salvar no aparelho \u2014 verifique o espa\u00e7o/permiss\u00f5es do navegador');
+  else if(storageMode !== 'firebase'){
+    try{ localStorage.setItem('c280_local_writes_pending', '1'); }catch(e2){}
+  }
   return okE && okC;
 }
 async function persistExpenses(){ return persistBoth(); }
@@ -1742,12 +1756,20 @@ async function persistEvolutionPhotosNow(){
       return true;
     }catch(e){
       console.error(e);
-      showToast('N\u00e3o foi poss\u00edvel sincronizar as fotos: ' + (e && e.code ? e.code : (e && e.message ? e.message : 'erro desconhecido')));
+      // mesma protecao: nunca perde a foto so porque a nuvem falhou nesse instante
+      try{
+        localStorage.setItem('c280_evolution_photos', JSON.stringify(evolutionPhotos));
+        localStorage.setItem('c280_local_writes_pending', '1');
+      }catch(e1){}
+      showToast('Sem conex\u00e3o para sincronizar as fotos agora \u2014 salvas neste aparelho, envia pra nuvem assim que a internet voltar');
       return false;
     }
   }
   const ok = await storageSet('evolution_photos', JSON.stringify(evolutionPhotos));
   if(!ok) showToast('N\u00e3o foi poss\u00edvel salvar as fotos no aparelho');
+  else if(storageMode !== 'firebase'){
+    try{ localStorage.setItem('c280_local_writes_pending', '1'); }catch(e2){}
+  }
   return ok;
 }
 
