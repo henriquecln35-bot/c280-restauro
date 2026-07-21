@@ -1043,7 +1043,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         <div class="code">S&#211;CIOS &#183; RONALDO &amp; HENRIQUE</div>
         <div id="syncBadge" style="font-size:9.5px; margin-top:2px; display:none;"></div>
         <div id="storageBadge" style="font-size:9.5px; margin-top:2px; display:none;"></div>
-        <div style="font-size:8px; color:var(--text-dim); opacity:.6; margin-top:2px;">vers&#227;o 2026-07-21-18h00</div>
+        <div style="font-size:8px; color:var(--text-dim); opacity:.6; margin-top:2px;">vers&#227;o 2026-07-21-19h15</div>
       </div>
     </div>
     <div style="display:flex; gap:8px;">
@@ -1442,6 +1442,8 @@ let storageMode = 'local';
 let firestoreDb = null;
 let firebaseDocRef = null;
 let firebasePhotosCollRef = null;
+let firebaseExpensesCollRef = null;
+let firebaseContributionsCollRef = null;
 let suppressNextSnapshot = false;
 let suppressNextPhotosSnapshot = false;
 
@@ -1494,6 +1496,8 @@ async function detectStorageMode(){
         // as fotos ficam numa subcolecao propria: cada documento do Firestore tem um limite
         // de 1 MB, e fotos junto com despesas no mesmo documento estourava esse limite
         firebasePhotosCollRef = firebaseDocRef.collection('photos');
+        firebaseExpensesCollRef = firebaseDocRef.collection('expenses');
+        firebaseContributionsCollRef = firebaseDocRef.collection('contributions');
         storageMode = 'firebase';
         return;
       }catch(e){
@@ -1513,25 +1517,35 @@ async function detectStorageMode(){
 
 function subscribeRealtime(){
   if(storageMode !== 'firebase' || !firebaseDocRef) return;
-  firebaseDocRef.onSnapshot((snap)=>{
-    // ignora o "eco" imediato da nossa propria escrita (ainda nao confirmada pelo servidor);
-    // so reage quando a mudanca ja esta de fato confirmada
-    if(snap.metadata && snap.metadata.hasPendingWrites) return;
-    if(suppressNextSnapshot){ suppressNextSnapshot = false; return; }
-    if(!snap.exists) return;
-    const data = snap.data();
-    try{ expenses = data.expenses ? JSON.parse(data.expenses) : []; }catch(e){ expenses = []; }
-    try{ contributions = data.contributions ? JSON.parse(data.contributions) : []; }catch(e){ contributions = []; }
-    try{
-      localStorage.setItem('c280_cache_expenses', JSON.stringify(expenses));
-      localStorage.setItem('c280_cache_contributions', JSON.stringify(contributions));
-    }catch(e){}
-    render();
-    if(typeof sheetFull !== 'undefined' && sheetFull.classList.contains('open')) renderPlanilha();
-    showToast('Atualizado \u2014 novo lan\u00e7amento do outro s\u00f3cio');
-  }, (err)=>{
-    console.error('Erro na sincroniza\u00e7\u00e3o em tempo real:', err);
-  });
+
+  if(firebaseExpensesCollRef){
+    firebaseExpensesCollRef.onSnapshot((snap)=>{
+      // ignora o "eco" imediato da nossa propria escrita (ainda nao confirmada pelo servidor);
+      // so reage quando a mudanca ja esta de fato confirmada. Cada despesa e seu proprio
+      // documento agora, entao dois aparelhos escrevendo despesas diferentes ao mesmo
+      // tempo nunca mais se atropelam.
+      if(snap.metadata && snap.metadata.hasPendingWrites) return;
+      expenses = snap.docs.map(d => d.data());
+      try{ localStorage.setItem('c280_cache_expenses', JSON.stringify(expenses)); }catch(e){}
+      render();
+      if(typeof sheetFull !== 'undefined' && sheetFull.classList.contains('open')) renderPlanilha();
+      showToast('Atualizado \u2014 novo lan\u00e7amento do outro s\u00f3cio');
+    }, (err)=>{
+      console.error('Erro na sincroniza\u00e7\u00e3o de despesas:', err);
+    });
+  }
+
+  if(firebaseContributionsCollRef){
+    firebaseContributionsCollRef.onSnapshot((snap)=>{
+      if(snap.metadata && snap.metadata.hasPendingWrites) return;
+      contributions = snap.docs.map(d => d.data());
+      try{ localStorage.setItem('c280_cache_contributions', JSON.stringify(contributions)); }catch(e){}
+      render();
+      if(typeof sheetFull !== 'undefined' && sheetFull.classList.contains('open')) renderPlanilha();
+    }, (err)=>{
+      console.error('Erro na sincroniza\u00e7\u00e3o de aportes:', err);
+    });
+  }
 
   if(firebasePhotosCollRef){
     firebasePhotosCollRef.onSnapshot((snap)=>{
@@ -1594,17 +1608,18 @@ async function loadData(){
       }catch(e){ console.error('migra\u00e7\u00e3o local \u2192 Firebase falhou:', e); }
     }
 
-    // se a migracao acima nao encontrou nada, busca do Firebase normalmente
+    // se a migracao acima nao encontrou nada, busca do Firebase normalmente.
+    // despesas e aportes agora sao subcolecoes (1 documento por item), assim
+    // dois aparelhos escrevendo ao mesmo tempo nunca mais se sobrescrevem
     if(!expenses){
       let fetchFailed = false;
       try{
-        const snap = await firebaseDocRef.get();
-        if(snap.exists){
-          const data = snap.data();
-          expenses = data.expenses ? JSON.parse(data.expenses) : [];
-          contributions = data.contributions ? JSON.parse(data.contributions) : [];
-        }else{
-          // o documento realmente nao existe ainda na nuvem (primeira vez de verdade) -
+        const expSnap = await firebaseExpensesCollRef.get();
+        const contribSnap = await firebaseContributionsCollRef.get();
+        expenses = expSnap.docs.map(d => d.data());
+        contributions = contribSnap.docs.map(d => d.data());
+        if(expenses.length === 0){
+          // a colecao realmente esta vazia ainda (primeira vez de verdade) --
           // aqui, e so aqui, e seguro criar o modelo inicial
           expenses = seedExpenses;
           contributions = seedContributions;
@@ -1693,14 +1708,61 @@ function persistBoth(){
   persistBothChain = persistBothChain.then(()=> persistBothNow());
   return persistBothChain;
 }
+async function syncCollectionBatch(collRef, localItems){
+  const snap = await collRef.get();
+  const remoteIds = snap.docs.map(d => d.id);
+  const localIds = new Set(localItems.map(item => item.id));
+  const batch = firestoreDb.batch();
+  localItems.forEach(item=>{ batch.set(collRef.doc(item.id), item); });
+  remoteIds.forEach(id=>{ if(!localIds.has(id)) batch.delete(collRef.doc(id)); });
+  await batch.commit();
+}
+
+// grava ou exclui APENAS o item especifico que mudou -- nunca compara com a lista
+// inteira, entao dois aparelhos mexendo em itens DIFERENTES ao mesmo tempo nunca
+// se atropelam (diferente de reescrever a colecao toda, que corria o risco de um
+// aparelho "deletar" por engano algo que o outro tinha acabado de adicionar)
+async function persistItemChange(collRef, storageKey, localArray, changeType, item, itemId){
+  if(storageMode === 'firebase' && collRef){
+    try{
+      if(changeType === 'delete'){
+        await collRef.doc(itemId).delete();
+      }else{
+        await collRef.doc(item.id).set(item);
+      }
+      try{ localStorage.setItem('c280_cache_'+storageKey, JSON.stringify(localArray)); }catch(e0){}
+      return true;
+    }catch(e){
+      console.error(e);
+      try{
+        localStorage.setItem('c280_'+storageKey, JSON.stringify(localArray));
+        localStorage.setItem('c280_local_writes_pending', '1');
+      }catch(e1){}
+      showToast('Sem conex\u00e3o para sincronizar agora \u2014 salvo neste aparelho, envia pra nuvem assim que a internet voltar');
+      return false;
+    }
+  }
+  const ok = await storageSet(storageKey, JSON.stringify(localArray));
+  if(!ok) showToast('N\u00e3o foi poss\u00edvel salvar no aparelho \u2014 verifique o espa\u00e7o/permiss\u00f5es do navegador');
+  else if(storageMode !== 'firebase'){
+    try{ localStorage.setItem('c280_local_writes_pending', '1'); }catch(e2){}
+  }
+  return ok;
+}
+async function persistExpenseUpsert(item){ return persistItemChange(firebaseExpensesCollRef, 'expenses', expenses, 'upsert', item, item.id); }
+async function persistExpenseDelete(id){ return persistItemChange(firebaseExpensesCollRef, 'expenses', expenses, 'delete', null, id); }
+async function persistContributionUpsert(item){ return persistItemChange(firebaseContributionsCollRef, 'contributions', contributions, 'upsert', item, item.id); }
+async function persistPhotoUpsert(item){ return persistItemChange(firebasePhotosCollRef, 'evolution_photos', evolutionPhotos, 'upsert', item, item.id); }
+async function persistPhotoDelete(id){ return persistItemChange(firebasePhotosCollRef, 'evolution_photos', evolutionPhotos, 'delete', null, id); }
+
 async function persistBothNow(){
   if(storageMode === 'firebase'){
     try{
-      suppressNextSnapshot = true;
-      await firebaseDocRef.set({
-        expenses: JSON.stringify(expenses),
-        contributions: JSON.stringify(contributions)
-      });
+      // cada despesa/aporte agora e seu proprio documento -- so o item que
+      // mudou e regravado, entao dois aparelhos escrevendo despesas
+      // DIFERENTES ao mesmo tempo nunca mais se atropelam
+      await syncCollectionBatch(firebaseExpensesCollRef, expenses);
+      await syncCollectionBatch(firebaseContributionsCollRef, contributions);
       try{
         localStorage.setItem('c280_cache_expenses', JSON.stringify(expenses));
         localStorage.setItem('c280_cache_contributions', JSON.stringify(contributions));
@@ -1740,18 +1802,7 @@ async function persistEvolutionPhotosNow(){
   if(storageMode === 'firebase'){
     try{
       suppressNextPhotosSnapshot = true;
-      const snap = await firebasePhotosCollRef.get();
-      const remoteIds = snap.docs.map(d => d.id);
-      const localIds = new Set(evolutionPhotos.map(p => p.id));
-
-      const batch = firestoreDb.batch();
-      evolutionPhotos.forEach(p=>{
-        batch.set(firebasePhotosCollRef.doc(p.id), p);
-      });
-      remoteIds.forEach(id=>{
-        if(!localIds.has(id)) batch.delete(firebasePhotosCollRef.doc(id));
-      });
-      await batch.commit();
+      await syncCollectionBatch(firebasePhotosCollRef, evolutionPhotos);
       try{ localStorage.setItem('c280_cache_photos', JSON.stringify(evolutionPhotos)); }catch(e0){}
       return true;
     }catch(e){
@@ -2015,7 +2066,7 @@ function renderExpenses(){
       expenses = expenses.filter(x=>x.id !== id);
       render();
       showToast('Despesa removida');
-      persistExpenses();
+      persistExpenseDelete(id);
     });
   });
 
@@ -2140,13 +2191,14 @@ document.getElementById('fSalvar').addEventListener('click', async ()=>{
     if(sheetFull.classList.contains('open')) renderPlanilha();
     overlayExp.classList.remove('open');
     showToast('Despesa atualizada');
-    persistExpenses();
+    if(exp) persistExpenseUpsert(exp);
   }else{
-    expenses.push({ id: uid(), date, supplier: fornecedor, description: descricao, payer: selectedPayer, method: forma, amount: valor, parcelas, vencimento, receipt: selectedReceiptDataUrl || null });
+    const novaDespesa = { id: uid(), date, supplier: fornecedor, description: descricao, payer: selectedPayer, method: forma, amount: valor, parcelas, vencimento, receipt: selectedReceiptDataUrl || null };
+    expenses.push(novaDespesa);
     render();
     overlayExp.classList.remove('open');
     showToast('Despesa registrada');
-    persistExpenses();
+    persistExpenseUpsert(novaDespesa);
   }
 });
 
@@ -2182,11 +2234,12 @@ document.getElementById('aSalvar').addEventListener('click', async ()=>{
     showToast('Preencha data, valor e o s\u00f3cio');
     return;
   }
-  contributions.push({ id: uid(), date, partner: selectedAportePayer, amount: valor, note });
+  const novoAporte = { id: uid(), date, partner: selectedAportePayer, amount: valor, note };
+  contributions.push(novoAporte);
   render();
   overlayAporte.classList.remove('open');
   showToast('Aporte registrado');
-  persistContributions();
+  persistContributionUpsert(novoAporte);
 });
 
 /* ---------------- exportar PDF ---------------- */
@@ -2557,7 +2610,7 @@ function renderPlanilha(){
       render();
       renderPlanilha();
       showToast('Despesa removida');
-      persistExpenses();
+      persistExpenseDelete(id);
     });
   });
 
@@ -2618,7 +2671,7 @@ document.getElementById('btnRemoverComprovanteExistente').addEventListener('clic
     exp.receipt = null;
     render();
     if(sheetFull.classList.contains('open')) renderPlanilha();
-    persistExpenses();
+    persistExpenseUpsert(exp);
   }
   overlayReceipt.classList.remove('open');
   showToast('Comprovante removido');
@@ -2637,7 +2690,7 @@ hiddenReceiptInput.addEventListener('change', async (e)=>{
       document.getElementById('receiptFullImg').src = dataUrl;
       overlayReceipt.classList.add('open');
       showToast('Comprovante salvo');
-      persistExpenses();
+      persistExpenseUpsert(exp);
     }
   }catch(err){
     console.error(err);
@@ -2823,11 +2876,12 @@ document.getElementById('pSalvar').addEventListener('click', async ()=>{
     showToast('Escolha a data e uma foto');
     return;
   }
-  evolutionPhotos.push({ id: uid(), date, photo: selectedPhotoDataUrl, caption });
+  const novaFoto = { id: uid(), date, photo: selectedPhotoDataUrl, caption };
+  evolutionPhotos.push(novaFoto);
   renderEvolution();
   overlayPhoto.classList.remove('open');
   showToast('Foto adicionada ao \u00e1lbum do restauro');
-  persistEvolutionPhotos();
+  persistPhotoUpsert(novaFoto);
 });
 
 const overlayPhotoView = document.getElementById('overlayPhotoView');
@@ -2845,11 +2899,12 @@ function openPhotoViewer(id){
 document.getElementById('closePhotoView').addEventListener('click', ()=> overlayPhotoView.classList.remove('open'));
 overlayPhotoView.addEventListener('click', (e)=>{ if(e.target === overlayPhotoView) overlayPhotoView.classList.remove('open'); });
 document.getElementById('btnDeletePhoto').addEventListener('click', ()=>{
-  evolutionPhotos = evolutionPhotos.filter(x=>x.id !== currentPhotoViewId);
+  const idParaExcluir = currentPhotoViewId;
+  evolutionPhotos = evolutionPhotos.filter(x=>x.id !== idParaExcluir);
   renderEvolution();
   overlayPhotoView.classList.remove('open');
   showToast('Foto removida do \u00e1lbum');
-  persistEvolutionPhotos();
+  persistPhotoDelete(idParaExcluir);
 });
 
 /* ---------------- dossie de restauro ---------------- */
