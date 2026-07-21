@@ -1161,7 +1161,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       <div style="display:flex; gap:12px; align-items:center;">
         <button type="button" id="btnPortfolioPdf" style="background:none;border:none;color:var(--text-dim);font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-          Ver Dossi&#234;
+          Di&#225;rio de Bordo
         </button>
         <button type="button" id="btnAddPhoto" style="background:none;border:none;color:var(--gold);font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -1374,7 +1374,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
 
 <div class="sheet-full" id="dossieFull" style="background:#0a0b0c;">
   <div class="sheet-full-header">
-    <h2>Dossi&#234; de restauro</h2>
+    <h2>Di&#225;rio de Bordo</h2>
     <div style="display:flex; gap:8px;">
       <button class="icon-btn" id="btnDossiePdf" title="Exportar em PDF" style="background:none;border:none;">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -1506,6 +1506,10 @@ function subscribeRealtime(){
     const data = snap.data();
     try{ expenses = data.expenses ? JSON.parse(data.expenses) : []; }catch(e){ expenses = []; }
     try{ contributions = data.contributions ? JSON.parse(data.contributions) : []; }catch(e){ contributions = []; }
+    try{
+      localStorage.setItem('c280_cache_expenses', JSON.stringify(expenses));
+      localStorage.setItem('c280_cache_contributions', JSON.stringify(contributions));
+    }catch(e){}
     render();
     if(typeof sheetFull !== 'undefined' && sheetFull.classList.contains('open')) renderPlanilha();
     showToast('Atualizado \u2014 novo lan\u00e7amento do outro s\u00f3cio');
@@ -1518,6 +1522,7 @@ function subscribeRealtime(){
       if(snap.metadata && snap.metadata.hasPendingWrites) return;
       if(suppressNextPhotosSnapshot){ suppressNextPhotosSnapshot = false; return; }
       evolutionPhotos = snap.docs.map(d => d.data());
+      try{ localStorage.setItem('c280_cache_photos', JSON.stringify(evolutionPhotos)); }catch(e){}
       renderEvolution();
       showToast('\u00c1lbum de evolu\u00e7\u00e3o atualizado pelo outro s\u00f3cio');
     }, (err)=>{
@@ -1571,32 +1576,63 @@ async function loadData(){
       localStorage.setItem('c280_firebase_migrated_v1', '1');
     }
 
-    // se a migra\u00e7\u00e3o acima n\u00e3o encontrou nada, busca do Firebase normalmente
+    // se a migracao acima nao encontrou nada, busca do Firebase normalmente
     if(!expenses){
+      let fetchFailed = false;
       try{
         const snap = await firebaseDocRef.get();
-        const data = snap.exists ? snap.data() : null;
-        expenses = data && data.expenses ? JSON.parse(data.expenses) : null;
-        contributions = data && data.contributions ? JSON.parse(data.contributions) : [];
+        if(snap.exists){
+          const data = snap.data();
+          expenses = data.expenses ? JSON.parse(data.expenses) : [];
+          contributions = data.contributions ? JSON.parse(data.contributions) : [];
+        }else{
+          // o documento realmente nao existe ainda na nuvem (primeira vez de verdade) -
+          // aqui, e so aqui, e seguro criar o modelo inicial
+          expenses = seedExpenses;
+          contributions = seedContributions;
+          await persistBoth();
+        }
       }catch(e){
         console.error('N\u00e3o foi poss\u00edvel carregar do Firebase:', e);
-        expenses = null; contributions = [];
-        showToast('N\u00e3o foi poss\u00edvel conectar ao servidor compartilhado \u2014 confira o FIREBASE_CONFIG');
+        fetchFailed = true;
       }
-      if(!expenses || !expenses.length){
-        expenses = seedExpenses;
-        contributions = seedContributions;
-        await persistBoth();
+
+      if(fetchFailed){
+        // NUNCA sobrescreve a nuvem so porque a leitura falhou (ex.: internet do
+        // celular instavel). Em vez disso, mostra uma copia local em cache (se
+        // existir) so para nao deixar a tela vazia, sem apagar nada remoto.
+        try{
+          const cachedExp = localStorage.getItem('c280_cache_expenses');
+          const cachedContrib = localStorage.getItem('c280_cache_contributions');
+          expenses = cachedExp ? JSON.parse(cachedExp) : [];
+          contributions = cachedContrib ? JSON.parse(cachedContrib) : [];
+        }catch(e2){
+          expenses = []; contributions = [];
+        }
+        showToast('Sem conex\u00e3o com o servidor agora \u2014 mostrando a \u00faltima c\u00f3pia salva neste aparelho. Nada foi apagado da nuvem.');
+      }else{
+        // buscou com sucesso: atualiza o cache local de leitura (nunca usado para
+        // sobrescrever a nuvem, so para exibir algo se a conexao cair depois)
+        try{
+          localStorage.setItem('c280_cache_expenses', JSON.stringify(expenses));
+          localStorage.setItem('c280_cache_contributions', JSON.stringify(contributions));
+        }catch(e3){}
       }
     }
     if(!evolutionPhotos || evolutionPhotos.length === 0){
       try{
         const photosSnap = await firebasePhotosCollRef.get();
         evolutionPhotos = photosSnap.docs.map(d => d.data());
+        try{ localStorage.setItem('c280_cache_photos', JSON.stringify(evolutionPhotos)); }catch(e4){}
       }catch(e){
         console.error('N\u00e3o foi poss\u00edvel carregar as fotos do Firebase:', e);
-        evolutionPhotos = [];
-        showToast('N\u00e3o foi poss\u00edvel carregar as fotos da nuvem: ' + (e && e.code ? e.code : (e && e.message ? e.message : 'erro desconhecido')));
+        try{
+          const cachedPhotos = localStorage.getItem('c280_cache_photos');
+          evolutionPhotos = cachedPhotos ? JSON.parse(cachedPhotos) : [];
+        }catch(e5){
+          evolutionPhotos = [];
+        }
+        showToast('Sem conex\u00e3o para buscar as fotos \u2014 mostrando a \u00faltima c\u00f3pia salva neste aparelho.');
       }
     }
     subscribeRealtime();
@@ -1647,6 +1683,10 @@ async function persistBothNow(){
         expenses: JSON.stringify(expenses),
         contributions: JSON.stringify(contributions)
       });
+      try{
+        localStorage.setItem('c280_cache_expenses', JSON.stringify(expenses));
+        localStorage.setItem('c280_cache_contributions', JSON.stringify(contributions));
+      }catch(e0){}
       return true;
     }catch(e){
       console.error(e);
@@ -1683,6 +1723,7 @@ async function persistEvolutionPhotosNow(){
         if(!localIds.has(id)) batch.delete(firebasePhotosCollRef.doc(id));
       });
       await batch.commit();
+      try{ localStorage.setItem('c280_cache_photos', JSON.stringify(evolutionPhotos)); }catch(e0){}
       return true;
     }catch(e){
       console.error(e);
@@ -2851,7 +2892,7 @@ function dsiFooterPlate(){
         <div class="dsi-ring">MB</div>
         <div>
           <div class="dsi-name">C280 Restauro</div>
-          <div class="dsi-sub">DOSSI\u00ca GERADO PELO APP</div>
+          <div class="dsi-sub">DI\u00c1RIO DE BORDO DO APP</div>
         </div>
       </div>
       <div class="dsi-footer-note">
@@ -2870,13 +2911,13 @@ function renderDossie(){
   const heroPhoto = sorted.length ? sorted[0].photo : null;
 
   let html = '';
-  html += '<div class="dsi-preview-banner">Dossi\u00ea extra\u00eddo do app em ' + extractedAt + '</div>';
+  html += '<div class="dsi-preview-banner">Di\u00e1rio extra\u00eddo do app em ' + extractedAt + '</div>';
 
   html += '<div class="dsi-hero">';
   if(heroPhoto) html += '<img src="'+heroPhoto+'" alt="Mercedes-Benz C280" crossorigin="anonymous">';
   html += `
     <div class="dsi-hero-content">
-      <span class="dsi-dossie-tab">Dossi\u00ea N. 001 \u00b7 Chassi W202</span>
+      <span class="dsi-dossie-tab">Di\u00e1rio N. 001 \u00b7 Chassi W202</span>
       <h1>Mercedes-Benz C280</h1>
       <div class="dsi-sub">Registro fotogr\u00e1fico do restauro \u00b7 1995</div>
     </div>
@@ -2921,48 +2962,175 @@ function renderDossie(){
   container.innerHTML = html;
 }
 
-async function exportDossiePdf(){
-  if(typeof html2canvas === 'undefined'){
-    showToast('Biblioteca de exporta\u00e7\u00e3o n\u00e3o carregou \u2014 verifique a conex\u00e3o e recarregue a p\u00e1gina');
-    return;
+async function buildDiarioPdf(){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
+  const pageW = 595.28, pageH = 841.89;
+  const margin = 44;
+  const contentW = pageW - margin*2;
+  const extractedAt = new Date().toLocaleString('pt-BR');
+  let y = 0;
+
+  function ensureSpace(h){
+    if(y + h > pageH - margin){
+      doc.addPage();
+      y = margin;
+    }
   }
+
+  function heading(text){
+    ensureSpace(30);
+    doc.setFont('helvetica','bold'); doc.setFontSize(14.5); doc.setTextColor(24,27,30);
+    doc.text(text, margin, y);
+    y += 8;
+    doc.setDrawColor(176,141,87); doc.setLineWidth(1);
+    doc.line(margin, y, margin+40, y);
+    y += 20;
+  }
+
+  function paragraph(text, opts){
+    opts = opts || {};
+    doc.setFont('helvetica', opts.bold ? 'bold' : (opts.italic ? 'italic' : 'normal'));
+    doc.setFontSize(opts.size || 10);
+    const c = opts.color || [70,70,70];
+    doc.setTextColor(c[0], c[1], c[2]);
+    const lines = doc.splitTextToSize(text, opts.width || contentW);
+    const lh = opts.lineHeight || 14;
+    lines.forEach(line=>{
+      ensureSpace(lh);
+      doc.text(line, opts.x || margin, y);
+      y += lh;
+    });
+    y += opts.spacingAfter !== undefined ? opts.spacingAfter : 10;
+  }
+
+  function factRow(items){
+    ensureSpace(46);
+    const colW = contentW / items.length;
+    items.forEach((it, i)=>{
+      const x = margin + i*colW;
+      doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(176,141,87);
+      const lines = doc.splitTextToSize(it[0], colW - 10);
+      doc.text(lines, x, y);
+      doc.setFont('helvetica','normal'); doc.setFontSize(7.3); doc.setTextColor(130);
+      const labelLines = doc.splitTextToSize(it[1], colW - 10);
+      doc.text(labelLines, x, y + 14 + (lines.length-1)*12);
+    });
+    y += 46;
+  }
+
+  // ---- cabecalho ----
+  try{ doc.addImage(LETTERHEAD_IMG, 'JPEG', margin, 24, 82, 55, undefined, 'FAST'); }
+  catch(e){ console.error('timbre nao pode ser desenhado', e); }
+  doc.setFont('helvetica','bold'); doc.setFontSize(19); doc.setTextColor(24,27,30);
+  doc.text('MERCEDES-BENZ C280', margin+96, 46);
+  doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(90);
+  doc.text('Di\u00e1rio de bordo do restauro \u00b7 1995', margin+96, 61);
+  doc.setFont('helvetica','italic'); doc.setFontSize(8.3); doc.setTextColor(176,141,87);
+  doc.text('Extra\u00eddo do app em ' + extractedAt, margin+96, 74);
+  doc.setDrawColor(176,141,87); doc.setLineWidth(1.1);
+  doc.line(margin, 92, pageW-margin, 92);
+  y = 118;
+
+  factRow([
+    ['W202', 'CHASSI'],
+    ['1995', 'ANO'],
+    ['Ronaldo & Henrique', 'SOCIEDADE'],
+    ['27/06/2026', 'IN\u00cdCIO DO PROJETO']
+  ]);
+  ensureSpace(20);
+  doc.setDrawColor(225); doc.setLineWidth(0.6);
+  doc.line(margin, y, pageW-margin, y);
+  y += 26;
+
+  // ---- historia do modelo ----
+  heading('A hist\u00f3ria do modelo');
+  paragraph('O Mercedes-Benz C280 nasceu dentro da fam\u00edlia W202, a primeira gera\u00e7\u00e3o da Classe C, apresentada em 1993 como sucessora do saudoso 190 (W201). Foi a resposta da Mercedes-Benz para quem queria o refinamento da marca da estrela em uma carroceria mais compacta, sem abrir m\u00e3o de solidez mec\u00e2nica.');
+  paragraph('Na configura\u00e7\u00e3o C280, o destaque ficava por conta do motor M104, um seis-cilindros em linha de 2.8 litros com dupla comando de v\u00e1lvulas no cabe\u00e7ote \u2014 na \u00e9poca, a motoriza\u00e7\u00e3o mais forte dispon\u00edvel na gama a gasolina do C-Class antes da chegada dos AMG.');
+  factRow([
+    ['142 kW', 'POT\u00caNCIA DO M104 2.8 (~193 CV)'],
+    ['~1,85 MI', 'UNID. W202 FABRICADAS (1994-2000)'],
+    ['1993', 'LAN\u00c7AMENTO DA GERA\u00c7\u00c3O W202']
+  ]);
+  paragraph('Fontes: especifica\u00e7\u00f5es t\u00e9cnicas e hist\u00f3rico de produ\u00e7\u00e3o do W202. N\u00famero de produ\u00e7\u00e3o refere-se ao total da fam\u00edlia W202 (todas as motoriza\u00e7\u00f5es); n\u00e3o h\u00e1 dado p\u00fablico exato de quantas unidades foram do C280 especificamente em 1995.', { size:7.5, color:[140,140,140], lineHeight:10, spacingAfter:16 });
+
+  // ---- proveniencia ----
+  heading('De onde ele veio');
+  paragraph('"Mais de cinco anos parado. At\u00e9 que um pai e um filho decidiram que essa hist\u00f3ria ainda n\u00e3o tinha acabado."', { italic:true, size:11, color:[24,27,30], lineHeight:15, spacingAfter:12 });
+  paragraph('O resgate come\u00e7ou oficialmente em 27 de junho de 2026, quando o ve\u00edculo \u2014 parado havia mais de cinco anos \u2014 foi adquirido por Ronaldo Nascimento e Henrique Nascimento. Pai e filho entraram juntos nesse projeto para trazer de volta todo o estilo e o luxo que um dia definiram esse C280.');
+  paragraph('Antes de chegar \u00e0s m\u00e3os da fam\u00edlia Nascimento, o carro esteve registrado em nome de Jos\u00e9 Roberto Moraes Malachias, em Santa Luzia (MG), ainda na sua cor preta original de f\u00e1brica.');
+  factRow([
+    ['JEA-3354', 'PLACA DE REGISTRO'],
+    ['WDBHA28W3SF192503', 'CHASSI (VIN)'],
+    ['Preto Obsidiana', 'COR ORIGINAL (C\u00d3D. 197)']
+  ]);
+  paragraph('Dados de placa, chassi e propriet\u00e1rio anterior extra\u00eddos do documento de registro do ve\u00edculo. N\u00fameros de CPF/RG e demais dados sens\u00edveis n\u00e3o s\u00e3o reproduzidos por privacidade.', { size:7.5, color:[140,140,140], lineHeight:10, spacingAfter:16 });
+
+  // ---- valor de mercado ----
+  heading('Quanto ele vale hoje');
+  paragraph('Passadas tr\u00eas d\u00e9cadas, um C280 1995 em bom estado j\u00e1 carrega o status de cl\u00e1ssico moderno. Segundo a refer\u00eancia da Tabela FIPE de julho de 2026 (c\u00f3digo FIPE 021004-8), o valor m\u00e9dio de mercado para a vers\u00e3o Elegance 2.8 gira em torno de R$ 53.782,00.', { spacingAfter:18 });
+
+  // ---- registro cronologico (fotos reais) ----
+  const sorted = [...evolutionPhotos].sort((a,b)=> a.date.localeCompare(b.date));
+  heading('Registro cronol\u00f3gico');
+  if(sorted.length === 0){
+    paragraph('Nenhuma foto de evolu\u00e7\u00e3o cadastrada ainda. Assim que voc\u00eas adicionarem fotos no \u00e1lbum, elas aparecem aqui automaticamente.', { color:[140,140,140] });
+  }
+  for(let i=0; i<sorted.length; i++){
+    const p = sorted[i];
+    let dims = { w:4, h:3 };
+    try{ dims = await getImageDims(p.photo); }catch(e){}
+    const maxImgW = contentW;
+    const maxImgH = 260;
+    const scale = Math.min(maxImgW/dims.w, maxImgH/dims.h);
+    const drawW = dims.w*scale, drawH = dims.h*scale;
+
+    ensureSpace(drawH + 40);
+    try{ doc.addImage(p.photo, 'JPEG', margin, y, drawW, drawH, undefined, 'FAST'); }
+    catch(e){ console.error('erro ao desenhar foto do diario', e); }
+    doc.setDrawColor(220); doc.setLineWidth(0.5);
+    doc.rect(margin, y, drawW, drawH);
+    y += drawH + 12;
+
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(176,141,87);
+    doc.text(String(i+1).padStart(2,'0') + '  \u00b7  ' + brDate(p.date), margin, y);
+    y += 14;
+    if(p.caption){
+      paragraph(p.caption, { size:10.5, color:[40,40,40], spacingAfter:20 });
+    }else{
+      y += 14;
+    }
+  }
+
+  // ---- rodape ----
+  ensureSpace(50);
+  doc.setDrawColor(220); doc.setLineWidth(0.6);
+  doc.line(margin, y, pageW-margin, y);
+  y += 18;
+  doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(24,27,30);
+  doc.text('C280 Restauro \u2014 Di\u00e1rio de bordo gerado pelo app', margin, y);
+  y += 14;
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(140);
+  doc.text(sorted.length + ' registro(s) no \u00e1lbum de evolu\u00e7\u00e3o \u00b7 Sociedade Ronaldo & Henrique', margin, y);
+
+  return doc;
+}
+
+async function exportDossiePdf(){
   if(!window.jspdf || !window.jspdf.jsPDF){
     showToast('A biblioteca de PDF n\u00e3o carregou \u2014 verifique sua conex\u00e3o e recarregue a p\u00e1gina');
     return;
   }
-  const el = document.getElementById('dsi-page');
-  showToast('Gerando PDF do dossi\u00ea, aguarde...');
-  let canvas;
+  showToast('Gerando o di\u00e1rio em PDF, aguarde...');
+  let doc;
   try{
-    canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#14171a' });
+    doc = await buildDiarioPdf();
   }catch(err){
     console.error(err);
-    showToast('N\u00e3o foi poss\u00edvel gerar a imagem do dossi\u00ea');
+    showToast('N\u00e3o foi poss\u00edvel montar o PDF do di\u00e1rio');
     return;
   }
-  try{
-    const { jsPDF } = window.jspdf;
-    const pageW = 595.28, pageH = 841.89;
-    const imgW = pageW;
-    const imgH = canvas.height * (imgW / canvas.width);
-    const doc = new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
-
-    let heightLeft = imgH;
-    let position = 0;
-    doc.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
-    heightLeft -= pageH;
-    while(heightLeft > 0){
-      position = heightLeft - imgH;
-      doc.addPage();
-      doc.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
-      heightLeft -= pageH;
-    }
-    showGeneratedPdf(doc, 'dossie-c280', 'Dossi\u00ea gerado', 'O dossi\u00ea completo do restauro (hist\u00f3ria, dados do ve\u00edculo e \u00e1lbum de fotos) foi gerado em PDF.');
-  }catch(err){
-    console.error(err);
-    showToast('N\u00e3o foi poss\u00edvel montar o PDF do dossi\u00ea');
-  }
+  showGeneratedPdf(doc, 'diario-c280', 'Di\u00e1rio gerado', 'O di\u00e1rio de bordo completo do restauro (hist\u00f3ria, dados do ve\u00edculo e \u00e1lbum de fotos) foi gerado em PDF.');
 }
 
 document.getElementById('closeDossieFull').addEventListener('click', ()=> document.getElementById('dossieFull').classList.remove('open'));
