@@ -138,7 +138,7 @@
 <div id="loginGate" style="position:fixed; inset:0; z-index:500; background:#0f1113; display:flex; align-items:center; justify-content:center; padding:24px;">
   <div style="width:100%; max-width:340px;">
     <div style="text-align:center; margin-bottom:24px;">
-      <div style="width:52px;height:52px;border-radius:50%;border:1.5px solid #b08d57;display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:20px;color:#b08d57;margin:0 auto 12px;">MB</div>
+      <div style="width:52px;height:52px;border-radius:50%;border:1.5px solid #b08d57;display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:20px;color:#b08d57;margin:0 auto 12px;">GN</div>
       <div style="font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:.03em; color:#f2efea;">MINHA GARAGEM</div>
       <div style="font-size:11px; color:#9aa1a8; letter-spacing:.1em; margin-top:2px;">ACESSO RESTRITO</div>
     </div>
@@ -194,7 +194,7 @@
 <div id="app">
   <header>
     <div class="brand">
-      <div class="emblem">MB</div>
+      <div class="emblem">GN</div>
       <div class="brand-text">
         <div class="name">Garagem</div>
         <div class="code">S&#211;CIOS &#183; RONALDO &amp; HENRIQUE</div>
@@ -388,6 +388,21 @@ async function loadCars(){
   }
 }
 
+// mant\u00e9m a garagem sincronizada em tempo real -- assim que algu\u00e9m adiciona um
+// carro em outro aparelho, ele aparece aqui sozinho, sem precisar recarregar a p\u00e1gina
+function subscribeGarageRealtime(){
+  if(storageMode !== 'firebase' || !garageCollRef) return;
+  garageCollRef.onSnapshot(function(snap){
+    extraCars = snap.docs
+      .map(function(d){ var v = d.data() || {}; return { id:d.id, name:v.name || 'Carro', year:v.year || '', cover:v.cover || null, createdAt:v.createdAt || 0 }; })
+      .sort(function(a,b){ return (a.createdAt||0) - (b.createdAt||0); });
+    try{ localStorage.setItem('garagem_cars_cache', JSON.stringify(extraCars)); }catch(e){}
+    renderCars();
+  }, function(err){
+    console.error('erro na sincroniza\u00e7\u00e3o da lista de carros:', err);
+  });
+}
+
 function carCardHtml(car){
   var coverInner = car.cover
     ? '<img src="'+car.cover+'" alt="'+car.name+'">'
@@ -490,8 +505,12 @@ document.getElementById('saveCarBtn').addEventListener('click', async function()
 (async function init(){
   renderCars();
   await detectStorageMode();
-  await loadCars();
-  renderCars();
+  if(storageMode === 'firebase'){
+    subscribeGarageRealtime();
+  }else{
+    await loadCars();
+    renderCars();
+  }
 })();
 </script>
 
