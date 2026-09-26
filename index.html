@@ -503,7 +503,15 @@ document.getElementById('saveCarBtn').addEventListener('click', async function()
 
 /* ---------------- init ---------------- */
 (async function init(){
+  // mostra na hora a ultima lista que ficou salva neste aparelho (sem esperar a
+  // nuvem responder) -- assim a tela nao fica vazia enquanto o Firebase conecta.
+  // Quando a nuvem responder de verdade, a lista e atualizada sozinha por baixo.
+  try{
+    var cached = localStorage.getItem('garagem_cars_cache');
+    if(cached) extraCars = JSON.parse(cached);
+  }catch(e){}
   renderCars();
+
   await detectStorageMode();
   if(storageMode === 'firebase'){
     subscribeGarageRealtime();
