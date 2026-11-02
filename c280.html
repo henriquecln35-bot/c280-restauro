@@ -1099,7 +1099,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   </div>
 
   <div class="section">
-    <div class="section-title">Propor&#231;&#227;o de gastos</div>
+    <div class="section-title">Propor&#231;&#227;o de contribui&#231;&#227;o</div>
     <div class="chart-card">
       <div class="chart-wrap">
         <canvas id="pieChart" width="128" height="128"></canvas>
@@ -1917,19 +1917,28 @@ function computeTotals(){
 function render(){
   const { totals, aportes, geral } = computeTotals();
 
-  document.getElementById('totalGeral').textContent = brl(geral);
-  document.getElementById('totalRonaldo').textContent = brl(totals.Ronaldo);
-  document.getElementById('totalHenrique').textContent = brl(totals.Henrique);
+  // contribuicao EFETIVA de cada socio para o grafico/cards: despesas que
+  // ele pagou diretamente, ajustadas pelo saldo liquido de aportes (um
+  // aporte e uma transferencia entre os socios para equalizar, nao uma
+  // despesa nova). Por isso efR+efH == geral SEMPRE -- nunca duplica o
+  // total gasto, so realoca entre os dois quem "efetivamente" bancou o que.
+  const netAporteRonaldo = aportes.Ronaldo - aportes.Henrique;
+  const efR = totals.Ronaldo + netAporteRonaldo;
+  const efH = totals.Henrique - netAporteRonaldo;
 
-  const pctR = geral ? (totals.Ronaldo/geral*100) : 0;
-  const pctH = geral ? (totals.Henrique/geral*100) : 0;
+  document.getElementById('totalGeral').textContent = brl(geral);
+  document.getElementById('totalRonaldo').textContent = brl(efR);
+  document.getElementById('totalHenrique').textContent = brl(efH);
+
+  const pctR = geral ? (efR/geral*100) : 0;
+  const pctH = geral ? (efH/geral*100) : 0;
   document.getElementById('barRonaldo').style.width = pctR + '%';
   document.getElementById('barHenrique').style.width = pctH + '%';
 
   document.getElementById('chartCenterVal').textContent = geral ? brl(geral).replace('R$','R$\\n') : 'R$ 0';
 
-  // cada parte roda isolada: se uma falhar (ex.: gr\u00e1fico sem internet), as outras continuam funcionando
-  try{ renderChart(totals, geral, pctR, pctH); }catch(e){ console.error('gr\u00e1fico falhou:', e); }
+  // cada parte roda isolada: se uma falhar (ex.: grafico sem internet), as outras continuam funcionando
+  try{ renderChart(efR, efH, geral, pctR, pctH); }catch(e){ console.error('gr\u00e1fico falhou:', e); }
   try{ renderSaldo(totals, aportes, geral); }catch(e){ console.error('saldo falhou:', e); }
   try{ renderAportes(); }catch(e){ console.error('aportes falhou:', e); }
   try{ renderExpenses(); }catch(e){ console.error('despesas falhou:', e); }
@@ -1937,7 +1946,7 @@ function render(){
   try{ updateStorageBadge(); }catch(e){ console.error('medidor de armazenamento falhou:', e); }
 }
 
-function renderChart(totals, geral, pctR, pctH){
+function renderChart(efR, efH, geral, pctR, pctH){
   const legend = document.getElementById('legend');
   legend.innerHTML = `
     <div class="legend-item"><span class="name"><span class="dot ronaldo" style="width:8px;height:8px;border-radius:50%;display:inline-block;background:${PARTNER_COLOR.Ronaldo}"></span>Ronaldo</span><span class="pct">${pctR.toFixed(1)}%</span></div>
@@ -1957,7 +1966,7 @@ function renderChart(totals, geral, pctR, pctH){
     return;
   }
   const ctx = document.getElementById('pieChart').getContext('2d');
-  const data = geral ? [totals.Ronaldo, totals.Henrique] : [1,1];
+  const data = geral ? [efR, efH] : [1,1];
   if(pieChartInstance) pieChartInstance.destroy();
   pieChartInstance = new Chart(ctx, {
     type:'doughnut',
@@ -1976,10 +1985,13 @@ function renderChart(totals, geral, pctR, pctH){
 }
 
 function renderSaldo(totals, aportes, geral){
-  const contribR = totals.Ronaldo + aportes.Ronaldo;
-  const contribH = totals.Henrique + aportes.Henrique;
-  const ideal = geral / 2;
-  const diff = contribH - contribR; // >0: Henrique contribuiu mais
+  // meta = metade da diferenca de despesas diretas (calculada uma unica
+  // vez), menos os aportes corretivos ja feitos, em valor cheio (1 para
+  // 1) -- nao se recalcula "metade do que falta" sobre um total que ja
+  // inclui aportes anteriores, senao cada aporte so fecha metade do
+  // caminho e a diferenca nunca chega a zero.
+  const diffDespesas = totals.Henrique - totals.Ronaldo; // >0: Henrique pagou mais despesas
+  const faltaRonaldo = (diffDespesas / 2) - aportes.Ronaldo + aportes.Henrique;
   const el = document.getElementById('saldoText');
   const valEl = document.getElementById('saldoValue');
 
@@ -1989,14 +2001,14 @@ function renderSaldo(totals, aportes, geral){
     valEl.style.color = 'var(--text)';
     return;
   }
-  if(Math.abs(diff) < 0.01){
+  if(Math.abs(faltaRonaldo) < 0.02){
     el.innerHTML = 'As contribui\u00e7\u00f5es de <b>Ronaldo</b> e <b>Henrique</b> est\u00e3o equalizadas.';
     valEl.textContent = 'R$ 0,00';
     valEl.style.color = 'var(--success)';
     return;
   }
-  const metade = Math.abs(diff)/2;
-  if(diff > 0){
+  const metade = Math.abs(faltaRonaldo);
+  if(faltaRonaldo > 0){
     el.innerHTML = `Para equilibrar as contribui\u00e7\u00f5es, um aporte de <b>Ronaldo</b> deixa a sociedade igualada com <b>Henrique</b>:`;
   }else{
     el.innerHTML = `Para equilibrar as contribui\u00e7\u00f5es, um aporte de <b>Henrique</b> deixa a sociedade igualada com <b>Ronaldo</b>:`;
@@ -2367,15 +2379,16 @@ function buildPdfDoc(){
     doc.text(`Aportes de Ronaldo: ${brl(aportes.Ronaldo)}`, 40, y); y+=16;
     doc.text(`Aportes de Henrique: ${brl(aportes.Henrique)}`, 40, y); y+=16;
   }
-  const contribR = totals.Ronaldo + aportes.Ronaldo;
-  const contribH = totals.Henrique + aportes.Henrique;
-  const diff = contribH - contribR;
-  if(Math.abs(diff) < 0.01){
+  // mesma formula usada na tela principal: meta calculada uma vez a partir
+  // das despesas diretas, menos os aportes ja feitos em valor cheio
+  const diffDespesas = totals.Henrique - totals.Ronaldo;
+  const faltaRonaldo = (diffDespesas / 2) - aportes.Ronaldo + aportes.Henrique;
+  if(Math.abs(faltaRonaldo) < 0.02){
     doc.text('Situa\u00e7\u00e3o: sociedade equalizada \u2014 nenhum ajuste necess\u00e1rio no momento.', 40, y);
   }else{
-    const metade = Math.abs(diff)/2;
-    const quemAporta = diff > 0 ? 'Ronaldo' : 'Henrique';
-    const quemRecebe = diff > 0 ? 'Henrique' : 'Ronaldo';
+    const metade = Math.abs(faltaRonaldo);
+    const quemAporta = faltaRonaldo > 0 ? 'Ronaldo' : 'Henrique';
+    const quemRecebe = faltaRonaldo > 0 ? 'Henrique' : 'Ronaldo';
     doc.text(`Para equilibrar as contribui\u00e7\u00f5es, um aporte de ${brl(metade)} de ${quemAporta} para ${quemRecebe} deixa a divis\u00e3o 50/50.`, 40, y);
   }
   return doc;
